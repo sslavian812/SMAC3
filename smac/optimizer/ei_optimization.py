@@ -496,6 +496,7 @@ class EASearch(AcquisitionFunctionMaximizer):
         self.generation_size = generation_size
         self.elite_rate = 1.0  # TODO make it a parameter, use trails to select the rest
         self.result_configurations = 20
+        self.crossover_probability = 0.5
 
     def _maximize(
             self,
@@ -572,6 +573,10 @@ class EASearch(AcquisitionFunctionMaximizer):
         ## Breed:
         # Generate new individuals with crossover:
         population = []
+        for i in range(0, start_generation-1):
+            for j in range(i+1, start_generation):
+                if(self.rng.standard_normal() > self.crossover_probability):
+                    population.append(self.crossover(start_generation[i], start_generation[j]))
 
         # Add parents:
         population += [start_generation[i] for i in range(len(start_generation))]
@@ -592,3 +597,6 @@ class EASearch(AcquisitionFunctionMaximizer):
             survivals.append(individual)
 
         return survivals
+
+    def crossover(self, a, b):
+        return a
