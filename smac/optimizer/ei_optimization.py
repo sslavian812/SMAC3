@@ -22,16 +22,16 @@ __version__ = "0.0.1"
 
 class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
     """Abstract class for acquisition maximization.
-    
+
     In order to use this class it has to be subclassed and the method
     ``_maximize`` must be implemented.
-    
+
     Parameters
     ----------
     acquisition_function : ~smac.optimizer.acquisition.AbstractAcquisitionFunction
-        
+
     config_space : ~smac.configspace.ConfigurationSpace
-    
+
     rng : np.random.RandomState or int, optional
     """
 
@@ -60,15 +60,15 @@ class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
             num_points: int
     ) -> Iterable[Configuration]:
         """Maximize acquisition function using ``_maximize``.
-        
+
         Parameters
         ----------
         runhistory : ~smac.runhistory.runhistory.RunHistory
-        
+
         stats : ~smac.stats.stats.Stats
-        
+
         num_points : int
-        
+
         Returns
         -------
         iterable
@@ -84,7 +84,7 @@ class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
             num_points: int
     ) -> Iterable[Tuple[float, Configuration]]:
         """Implements acquisition function maximization.
-        
+
         In contrast to ``maximize``, this method returns an iterable of tuples,
         consisting of the acquisition function value and the configuration. This
         allows to plug together different acquisition function maximizers.
@@ -100,7 +100,7 @@ class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
         Returns
         -------
         iterable
-            An iterable consistng of 
+            An iterable consistng of
             tuple(acqusition_value, :class:`smac.configspace.Configuration`).
         """
         raise NotImplementedError()
@@ -140,11 +140,11 @@ class LocalSearch(AcquisitionFunctionMaximizer):
     Parameters
     ----------
     acquisition_function : ~smac.optimizer.acquisition.AbstractAcquisitionFunction
-        
+
     config_space : ~smac.configspace.ConfigurationSpace
-    
+
     rng : np.random.RandomState or int, optional
-    
+
     epsilon: float
         In order to perform a local move one of the incumbent's neighbors
         needs at least an improvement higher than epsilon
@@ -316,9 +316,9 @@ class RandomSearch(AcquisitionFunctionMaximizer):
     Parameters
     ----------
     acquisition_function : ~smac.optimizer.acquisition.AbstractAcquisitionFunction
-        
+
     config_space : ~smac.configspace.ConfigurationSpace
-    
+
     rng : np.random.RandomState or int, optional
     """
 
@@ -348,18 +348,18 @@ class RandomSearch(AcquisitionFunctionMaximizer):
 
 class InterleavedLocalAndRandomSearch(AcquisitionFunctionMaximizer):
     """Implements SMAC's default acquisition function optimization.
-    
-    This optimizer performs local search from the previous best points 
-    according, to the acquisition function, uses the acquisition function to 
-    sort randomly sampled configurations and interleaves unsorted, randomly 
+
+    This optimizer performs local search from the previous best points
+    according, to the acquisition function, uses the acquisition function to
+    sort randomly sampled configurations and interleaves unsorted, randomly
     sampled configurations in between.
-    
+
     Parameters
     ----------
     acquisition_function : ~smac.optimizer.acquisition.AbstractAcquisitionFunction
-        
+
     config_space : ~smac.configspace.ConfigurationSpace
-    
+
     rng : np.random.RandomState or int, optional
     """
 
@@ -511,7 +511,7 @@ class EASearch(AcquisitionFunctionMaximizer):
         Parameters
         ----------
         num_points:  int:
-            number of points to start with    
+            number of points to start with
         *args:
             Additional parameters that will be passed to the
             acquisition function
@@ -528,22 +528,25 @@ class EASearch(AcquisitionFunctionMaximizer):
         generation = self._get_initial_points(
             max(num_points, self.generation_size), runhistory)
 
+        scored_survivals = []  # : [Tuple[float, Configuration]]
+
         # perform evolutionary computations
         for g in range(0, self.max_generations):
-            generation = self._one_iter(generation)
+            scored_survivals = self._one_iter(generation)
+            generation = list(map(lambda x: x[1], scored_survivals[:self.result_configurations]))
 
-        if self.result_configurations > self.generation_size:
-            generation += self._get_initial_points(
-                self.result_configurations - self.generation_size, runhistory)
+        # if self.result_configurations > self.generation_size:
+        #     generation += self._get_initial_points(
+        #         self.result_configurations - self.generation_size, runhistory)
 
         # shuffle for random tie-break
-        self.rng.shuffle(generation)
+        self.rng.shuffle(scored_survivals)
 
         # sort according to acq value
-        generation.sort(reverse=True, key=lambda x: x[0])
+        scored_survivals.sort(reverse=True, key=lambda x: x[0])
 
         # return required amount of configurations
-        return generation[:self.result_configurations]
+        return scored_survivals[:self.result_configurations]
 
     def _get_initial_points(self, num_configurations, runhistory):
         if runhistory.empty():
@@ -570,12 +573,17 @@ class EASearch(AcquisitionFunctionMaximizer):
             *args
     ) -> [Tuple[float, Configuration]]:
 
+        # if we have too little to start with
+        if self.generation_size > len(start_generation):
+            start_generation = start_generation + \
+                               self.config_space.sample_configuration(size=self.generation_size - len(start_generation))
+
         ## Breed:
         # Generate new individuals with crossover:
         population = []
-        for i in range(0, start_generation-1):
-            for j in range(i+1, start_generation):
-                if(self.rng.standard_normal() > self.crossover_probability):
+        for i in range(0, len(start_generation) - 1):
+            for j in range(i + 1, len(start_generation)):
+                if (self.rng.standard_normal() > self.crossover_probability):
                     population.append(self.crossover(start_generation[i], start_generation[j]))
 
         # Add parents:
@@ -583,8 +591,8 @@ class EASearch(AcquisitionFunctionMaximizer):
 
         # Everyone is mutating
         for incumbent in start_generation:
-            population += get_one_exchange_neighbourhood(
-                incumbent, seed=self.rng.randint(MAXINT))
+            neighbours = get_one_exchange_neighbourhood(incumbent, seed=self.rng.randint(MAXINT))
+            population += neighbours
 
         # Select:
         survivals = []
@@ -593,10 +601,20 @@ class EASearch(AcquisitionFunctionMaximizer):
         elite_num = int(self.generation_size * self.elite_rate)
         for i in range(0, elite_num):
             individual = sorted[i]
-            individual.origin = "MOEA Search"
             survivals.append(individual)
 
         return survivals
 
-    def crossover(self, a, b):
+    def crossover(self, a : Configuration, b : Configuration):
+        # hyperparameters_list = list(
+        #     list(a.configuration_space._hyperparameters.keys())
+        # )
+        #
+        # c_point = int(self.rng.standard_normal() * len(hyperparameters_list))
+        #
+        # # swap hyperparameters:
+        # new_a = a;
+        # for i in range (c_point, len(hyperparameters_list)):
+        #     new_a.
+
         return a
