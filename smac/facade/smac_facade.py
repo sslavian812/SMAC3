@@ -185,6 +185,10 @@ class SMAC(object):
                 type(acquisition_function_optimizer)
             )
 
+        # inject acquisition_function if necessary
+        if acquisition_function_optimizer.acquisition_function is None:
+            acquisition_function_optimizer.acquisition_function = acquisition_function
+
         # initialize tae_runner
         # First case, if tae_runner is None, the target algorithm is a call
         # string in the scenario file
@@ -324,7 +328,7 @@ class SMAC(object):
             elif scenario.run_obj == 'quality':
                 runhistory2epm = RunHistory2EPM4Cost(scenario=scenario, num_params=num_params,
                                                      success_states=[
-                                                         StatusType.SUCCESS, 
+                                                         StatusType.SUCCESS,
                                                          StatusType.CRASHED],
                                                      impute_censored_data=False, impute_state=None)
 

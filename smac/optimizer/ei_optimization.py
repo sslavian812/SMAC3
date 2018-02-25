@@ -39,7 +39,7 @@ class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
             self,
             acquisition_function: AbstractAcquisitionFunction,
             config_space: ConfigurationSpace,
-            rng: Union[bool, np.random.RandomState]=None
+            rng: Union[bool, np.random.RandomState] = None
     ):
         self.logger = logging.getLogger(
             self.__module__ + "." + self.__class__.__name__
@@ -52,7 +52,6 @@ class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
             self.rng = np.random.RandomState(seed=1)
         else:
             self.rng = rng
-
 
     def maximize(
             self,
@@ -136,7 +135,6 @@ class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
 
 
 class LocalSearch(AcquisitionFunctionMaximizer):
-
     """Implementation of SMAC's local search.
 
     Parameters
@@ -160,8 +158,8 @@ class LocalSearch(AcquisitionFunctionMaximizer):
             acquisition_function: AbstractAcquisitionFunction,
             config_space: ConfigurationSpace,
             rng: Union[bool, np.random.RandomState] = None,
-            epsilon: float=0.00001,
-            max_iterations: Optional[int]=None
+            epsilon: float = 0.00001,
+            max_iterations: Optional[int] = None
     ):
         super().__init__(acquisition_function, config_space, rng)
         self.epsilon = epsilon
@@ -300,7 +298,7 @@ class LocalSearch(AcquisitionFunctionMaximizer):
 
             if (not changed_inc) or \
                     (self.max_iterations is not None and
-                     local_search_steps == self.max_iterations):
+                             local_search_steps == self.max_iterations):
                 self.logger.debug("Local search took %d steps and looked at %d "
                                   "configurations. Computing the acquisition "
                                   "value for one configuration took %f seconds"
@@ -329,7 +327,7 @@ class RandomSearch(AcquisitionFunctionMaximizer):
             runhistory: RunHistory,
             stats: Stats,
             num_points: int,
-            _sorted: bool=False,
+            _sorted: bool = False,
             *args
     ) -> List[Tuple[float, Configuration]]:
 
@@ -364,6 +362,7 @@ class InterleavedLocalAndRandomSearch(AcquisitionFunctionMaximizer):
     
     rng : np.random.RandomState or int, optional
     """
+
     def __init__(
             self,
             acquisition_function: AbstractAcquisitionFunction,
@@ -426,8 +425,7 @@ class InterleavedLocalAndRandomSearch(AcquisitionFunctionMaximizer):
     ) -> Iterable[Tuple[float, Configuration]]:
         raise NotImplementedError()
 
-        
-        
+
 class ChallengerList(object):
     """Helper class to interleave random configurations in a list of challengers.
 
@@ -467,3 +465,130 @@ class ChallengerList(object):
             config = self.challengers[self._index]
             self._index += 1
             return config
+
+
+class EASearch(AcquisitionFunctionMaximizer):
+    """Implementation of EA-SMAC's search.
+
+    Parameters
+    ----------
+    acquisition_function : ~smac.optimizer.acquisition.AbstractAcquisitionFunction
+
+    config_space : ~smac.configspace.ConfigurationSpace
+
+    rng : np.random.RandomState or int, optional
+
+    max_generations: int
+        Maximum number of generations in evolutionary process
+
+    """
+
+    def __init__(
+            self,
+            acquisition_function: AbstractAcquisitionFunction,
+            config_space: ConfigurationSpace,
+            max_generations: int,
+            generation_size: int,
+            rng: Union[bool, np.random.RandomState] = None,
+    ):
+        super().__init__(acquisition_function, config_space, rng)
+        self.max_generations = max_generations
+        self.generation_size = generation_size
+        self.elite_rate = 1.0  # TODO make it a parameter, use trails to select the rest
+        self.result_configurations = 20
+
+    def _maximize(
+            self,
+            runhistory: RunHistory,
+            stats: Stats,
+            num_points: int,
+            *args
+    ) -> List[Tuple[float, Configuration]]:
+        """
+        Performs EA search
+
+        Parameters
+        ----------
+        num_points:  int:
+            number of points to start with    
+        *args:
+            Additional parameters that will be passed to the
+            acquisition function
+
+        Returns
+        -------
+        acq_vals: np.array(1,1)
+            The acquisition value of the incumbent
+        survivals: np.array(1, D)
+            The best configurations found among population
+
+        """
+
+        generation = self._get_initial_points(
+            max(num_points, self.generation_size), runhistory)
+
+        # perform evolutionary computations
+        for g in range(0, self.max_generations):
+            generation = self._one_iter(generation)
+
+        if self.result_configurations > self.generation_size:
+            generation += self._get_initial_points(
+                self.result_configurations - self.generation_size, runhistory)
+
+        # shuffle for random tie-break
+        self.rng.shuffle(generation)
+
+        # sort according to acq value
+        generation.sort(reverse=True, key=lambda x: x[0])
+
+        # return required amount of configurations
+        return generation[:self.result_configurations]
+
+    def _get_initial_points(self, num_configurations, runhistory):
+        if runhistory.empty():
+            init_points = self.config_space.sample_configuration(
+                size=num_configurations)
+        else:
+            # initiate local search with best configurations from previous runs
+            configs_previous_runs = runhistory.get_all_configs()
+            configs_previous_runs_sorted = self._sort_configs_by_acq_value(
+                configs_previous_runs)
+            num_initial_configs = int(min(
+                len(configs_previous_runs_sorted),
+                num_configurations)
+            )
+            init_points = list(
+                map(lambda x: x[1],
+                    configs_previous_runs_sorted[:num_initial_configs])
+            )
+        return init_points
+
+    def _one_iter(
+            self,
+            start_generation: [Configuration],
+            *args
+    ) -> [Tuple[float, Configuration]]:
+
+        ## Breed:
+        # Generate new individuals with crossover:
+        population = []
+
+        # Add parents:
+        population += [start_generation[i] for i in range(len(start_generation))]
+
+        # Everyone is mutating
+        for incumbent in start_generation:
+            population += get_one_exchange_neighbourhood(
+                incumbent, seed=self.rng.randint(MAXINT))
+
+        # Select:
+        survivals = []
+        sorted = self._sort_configs_by_acq_value(population)
+
+        elite_num = int(self.generation_size * self.elite_rate)
+        for i in range(0, elite_num):
+            individual = sorted[i]
+            individual.origin = "MOEA Search"
+            survivals.append(individual)
+
+        return survivals
