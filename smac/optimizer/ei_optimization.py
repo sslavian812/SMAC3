@@ -578,23 +578,29 @@ class EASearch(AcquisitionFunctionMaximizer):
             start_generation = start_generation + \
                                self.config_space.sample_configuration(size=self.generation_size - len(start_generation))
 
-        ## Breed:
-        # Generate new individuals with crossover:
+        ## Breed phase:
         population = []
-        for i in range(0, len(start_generation) - 1):
-            for j in range(i + 1, len(start_generation)):
-                if (self.rng.standard_normal() > self.crossover_probability):
-                    population.append(self.crossover(start_generation[i], start_generation[j]))
 
         # Add parents:
         population += [start_generation[i] for i in range(len(start_generation))]
 
-        # Everyone is mutating
+        # Generate new individuals with crossover:
+        for i in range(0, len(start_generation) - 1):
+            for j in range(i + 1, len(start_generation)):
+                if (self.rng.standard_normal() > self.crossover_probability):
+                    population += self.crossover(start_generation[i], start_generation[j])
+
+        ## Mutation phase (produces new individuals too):
         for incumbent in start_generation:
             neighbours = get_one_exchange_neighbourhood(incumbent, seed=self.rng.randint(MAXINT))
             population += neighbours
 
-        # Select:
+        # Make population contain only unique individuals:
+        arrays = list(map(lambda x: x.get_array(), population))
+        indices = np.unique(arrays, return_index=True, axis=0)
+        population = [population[ind] for ind in indices[1][::-1]]
+
+        ## Selection phase:
         survivals = []
         sorted = self._sort_configs_by_acq_value(population)
 
@@ -605,16 +611,23 @@ class EASearch(AcquisitionFunctionMaximizer):
 
         return survivals
 
-    def crossover(self, a : Configuration, b : Configuration):
-        # hyperparameters_list = list(
-        #     list(a.configuration_space._hyperparameters.keys())
-        # )
-        #
-        # c_point = int(self.rng.standard_normal() * len(hyperparameters_list))
-        #
-        # # swap hyperparameters:
-        # new_a = a;
-        # for i in range (c_point, len(hyperparameters_list)):
-        #     new_a.
+    def crossover(self, a: Configuration, b: Configuration) -> [Configuration]:
+        hyperparameters_list = list(
+            list(a.configuration_space._hyperparameters.keys())
+        )
 
-        return a
+        c_point = int(self.rng.uniform(0, 1) * len(hyperparameters_list))
+
+        a_array = a.get_array()
+        b_array = b.get_array()
+
+        for i in range(c_point, len(hyperparameters_list)):
+            t = a_array[i]
+            a_array[i] = b_array[i]
+            b_array[i] = t
+
+        # new configurations with new arrays
+        new_a = Configuration(configuration_space=a.configuration_space, vector=a_array, origin="Crossover")
+        new_b = Configuration(configuration_space=b.configuration_space, vector=b_array, origin="Crossover")
+
+        return [new_a, new_b]
