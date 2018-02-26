@@ -1,15 +1,15 @@
 import abc
 import logging
 import time
-import numpy as np
-
 from typing import Iterable, List, Union, Tuple, Optional
 
+import numpy as np
+
 from smac.configspace import get_one_exchange_neighbourhood, \
-    convert_configurations_to_array, Configuration, ConfigurationSpace
+    Configuration, ConfigurationSpace
+from smac.optimizer.acquisition import AbstractAcquisitionFunction
 from smac.runhistory.runhistory import RunHistory
 from smac.stats.stats import Stats
-from smac.optimizer.acquisition import AbstractAcquisitionFunction
 from smac.utils.constants import MAXINT
 
 __author__ = "Aaron Klein, Marius Lindauer"
@@ -600,7 +600,7 @@ class EASearch(AcquisitionFunctionMaximizer):
         indices = np.unique(arrays, return_index=True, axis=0)
         population = [population[ind] for ind in indices[1][::-1]]
 
-        ## Selection phase:
+        # #Selection phase:
         survivals = []
         sorted = self._sort_configs_by_acq_value(population)
 
@@ -612,16 +612,12 @@ class EASearch(AcquisitionFunctionMaximizer):
         return survivals
 
     def crossover(self, a: Configuration, b: Configuration) -> [Configuration]:
-        hyperparameters_list = list(
-            list(a.configuration_space._hyperparameters.keys())
-        )
-
-        c_point = int(self.rng.uniform(0, 1) * len(hyperparameters_list))
-
         a_array = a.get_array()
         b_array = b.get_array()
 
-        for i in range(c_point, len(hyperparameters_list)):
+        c_point = int(self.rng.uniform(0, 1) * len(a_array))
+
+        for i in range(c_point, len(a_array)):
             t = a_array[i]
             a_array[i] = b_array[i]
             b_array[i] = t
@@ -631,3 +627,85 @@ class EASearch(AcquisitionFunctionMaximizer):
         new_b = Configuration(configuration_space=b.configuration_space, vector=b_array, origin="Crossover")
 
         return [new_a, new_b]
+
+
+class InterleavedLocalAndEvolutionarySearch(AcquisitionFunctionMaximizer):
+    """Implements acquisition function optimization.
+
+    This optimizer performs local search from the previous best points
+    according to the acquisition function, uses the acquisition function to
+    perform evolutionary seach from some randon initial configurations,
+    and interleaves unsorted, randomly sampled configurations in between.
+
+    Parameters
+    ----------
+    acquisition_function : ~smac.optimizer.acquisition.AbstractAcquisitionFunction
+
+    config_space : ~smac.configspace.ConfigurationSpace
+
+    rng : np.random.RandomState or int, optional
+    """
+
+    def __init__(
+            self,
+            acquisition_function: AbstractAcquisitionFunction,
+            config_space: ConfigurationSpace,
+            rng: Union[bool, np.random.RandomState] = None,
+    ):
+        super().__init__(acquisition_function, config_space, rng)
+        self.ea_search = EASearch(
+            acquisition_function=acquisition_function, config_space=config_space,
+            max_generations=200, generation_size=20, rng=rng
+        )
+        self.local_search = LocalSearch(
+            acquisition_function, config_space, rng
+        )
+
+    def maximize(
+            self,
+            runhistory: RunHistory,
+            stats: Stats,
+            num_points: int,
+            *args
+    ) -> Iterable[Configuration]:
+
+        # inject achuisition function if necessary:
+        if self.local_search.acquisition_function is None:
+            self.local_search.acquisition_function = self.acquisition_function
+
+        if self.ea_search.acquisition_function is None:
+            self.ea_search.acquisition_function = self.acquisition_function
+
+        next_configs_by_local_search = self.local_search._maximize(
+            runhistory, stats, 10,
+        )
+
+        # Get configurations sorted by EI
+        next_configs_by_ea_search = self.ea_search._maximize(
+            runhistory,
+            stats,
+            num_points - len(next_configs_by_local_search),
+        )
+
+        next_configs_by_acq_value = (
+            next_configs_by_ea_search
+            + next_configs_by_local_search
+        )
+        next_configs_by_acq_value.sort(reverse=True, key=lambda x: x[0])
+        self.logger.debug(
+            "First 10 acq func (origin) values of selected configurations: %s",
+            str([[_[0], _[1].origin] for _ in next_configs_by_acq_value[:10]])
+        )
+        next_configs_by_acq_value = [_[1] for _ in next_configs_by_acq_value]
+
+        challengers = ChallengerList(next_configs_by_acq_value,
+                                     self.config_space)
+        return challengers
+
+    def _maximize(
+            self,
+            runhistory: RunHistory,
+            stats: Stats,
+            num_points: int
+    ) -> Iterable[Tuple[float, Configuration]]:
+        raise NotImplementedError()
